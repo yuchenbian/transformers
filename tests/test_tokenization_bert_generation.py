@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright 2020 The Google AI Language Team Authors.
+# Copyright 2020 The HuggingFace Team. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,13 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import os
 import unittest
 
+from transformers import BertGenerationTokenizer
 from transformers.file_utils import cached_property
-from transformers.testing_utils import require_torch, slow
-from transformers.tokenization_bert_generation import BertGenerationTokenizer
+from transformers.testing_utils import require_sentencepiece, require_torch, slow
 
 from .test_tokenization_common import TokenizerTesterMixin
 
@@ -29,9 +28,11 @@ SPIECE_UNDERLINE = "▁"
 SAMPLE_VOCAB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures/test_sentencepiece.model")
 
 
+@require_sentencepiece
 class BertGenerationTokenizationTest(TokenizerTesterMixin, unittest.TestCase):
 
     tokenizer_class = BertGenerationTokenizer
+    test_sentencepiece = True
 
     def setUp(self):
         super().setUp()
@@ -185,8 +186,8 @@ class BertGenerationTokenizationTest(TokenizerTesterMixin, unittest.TestCase):
 
         self.assertListEqual(original_tokenizer_encodings, self.big_tokenizer.encode(symbols))
 
-    @slow
     @require_torch
+    @slow
     def test_torch_encode_plus_sent_to_model(self):
         import torch
 

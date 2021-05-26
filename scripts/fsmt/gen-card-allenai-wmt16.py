@@ -1,4 +1,17 @@
 #!/usr/bin/env python
+# Copyright 2020 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # Usage:
 # ./gen-card-allenai-wmt16.py
@@ -33,7 +46,7 @@ tags:
 - translation
 - wmt16
 - allenai
-license: Apache 2.0
+license: apache-2.0
 datasets:
 - wmt16
 metrics:
@@ -54,24 +67,13 @@ All 3 models are available:
 * [wmt16-en-de-dist-6-1](https://huggingface.co/allenai/wmt16-en-de-dist-6-1)
 * [wmt16-en-de-12-1](https://huggingface.co/allenai/wmt16-en-de-12-1)
 
-```
-@misc{{kasai2020deep,
-    title={{Deep Encoder, Shallow Decoder: Reevaluating the Speed-Quality Tradeoff in Machine Translation}},
-    author={{Jungo Kasai and Nikolaos Pappas and Hao Peng and James Cross and Noah A. Smith}},
-    year={{2020}},
-    eprint={{2006.10369}},
-    archivePrefix={{arXiv}},
-    primaryClass={{cs.CL}}
-}}
-```
 
 ## Intended uses & limitations
 
 #### How to use
 
 ```python
-from transformers.tokenization_fsmt import FSMTTokenizer
-from transformers.modeling_fsmt import FSMTForConditionalGeneration
+from transformers import FSMTForConditionalGeneration, FSMTTokenizer
 mname = "allenai/{model_name}"
 tokenizer = FSMTTokenizer.from_pretrained(mname)
 model = FSMTForConditionalGeneration.from_pretrained(mname)
@@ -122,6 +124,21 @@ PYTHONPATH="src:examples/seq2seq" python examples/seq2seq/run_eval.py allenai/{m
 
 - [training, etc.](http://www.statmt.org/wmt16/)
 - [test set](http://matrix.statmt.org/test_sets/newstest2016.tgz?1504722372)
+
+
+### BibTeX entry and citation info
+
+```
+@misc{{kasai2020deep,
+    title={{Deep Encoder, Shallow Decoder: Reevaluating the Speed-Quality Tradeoff in Machine Translation}},
+    author={{Jungo Kasai and Nikolaos Pappas and Hao Peng and James Cross and Noah A. Smith}},
+    year={{2020}},
+    eprint={{2006.10369}},
+    archivePrefix={{arXiv}},
+    primaryClass={{cs.CL}}
+}}
+```
+
 """
     model_card_dir.mkdir(parents=True, exist_ok=True)
     path = os.path.join(model_card_dir, "README.md")

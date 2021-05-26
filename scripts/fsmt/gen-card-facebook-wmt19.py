@@ -1,4 +1,17 @@
 #!/usr/bin/env python
+# Copyright 2020 The HuggingFace Team. All rights reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 # Usage:
 # ./gen-card-facebook-wmt19.py
@@ -34,7 +47,7 @@ tags:
 - translation
 - wmt19
 - facebook
-license: Apache 2.0
+license: apache-2.0
 datasets:
 - wmt19
 metrics:
@@ -63,8 +76,7 @@ All four models are available:
 #### How to use
 
 ```python
-from transformers.tokenization_fsmt import FSMTTokenizer
-from transformers.modeling_fsmt import FSMTForConditionalGeneration
+from transformers import FSMTForConditionalGeneration, FSMTTokenizer
 mname = "facebook/wmt19-{src_lang}-{tgt_lang}"
 tokenizer = FSMTTokenizer.from_pretrained(mname)
 model = FSMTForConditionalGeneration.from_pretrained(mname)
@@ -117,6 +129,19 @@ note: fairseq reports using a beam of 50, so you should get a slightly higher sc
 
 - [training, etc.](http://www.statmt.org/wmt19/)
 - [test set](http://matrix.statmt.org/test_sets/newstest2019.tgz?1556572561)
+
+
+### BibTeX entry and citation info
+
+```bibtex
+@inproceedings{{...,
+  year={{2020}},
+  title={{Facebook FAIR's WMT19 News Translation Task Submission}},
+  author={{Ng, Nathan and Yee, Kyra and Baevski, Alexei and Ott, Myle and Auli, Michael and Edunov, Sergey}},
+  booktitle={{Proc. of WMT}},
+}}
+```
+
 
 ## TODO
 

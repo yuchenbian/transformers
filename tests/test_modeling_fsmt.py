@@ -21,9 +21,10 @@ import timeout_decorator  # noqa
 from parameterized import parameterized
 from transformers import is_torch_available
 from transformers.file_utils import cached_property
-from transformers.testing_utils import require_torch, slow, torch_device
+from transformers.testing_utils import require_sentencepiece, require_tokenizers, require_torch, slow, torch_device
 
 from .test_configuration_common import ConfigTester
+from .test_generation_utils import GenerationTesterMixin
 from .test_modeling_common import ModelTesterMixin, ids_tensor
 
 
@@ -31,12 +32,13 @@ if is_torch_available():
     import torch
 
     from transformers import FSMTConfig, FSMTForConditionalGeneration, FSMTModel, FSMTTokenizer
-    from transformers.modeling_fsmt import (
+    from transformers.models.fsmt.modeling_fsmt import (
         SinusoidalPositionalEmbedding,
         _prepare_fsmt_decoder_inputs,
         invert_mask,
         shift_tokens_right,
     )
+    from transformers.pipelines import TranslationPipeline
 
 
 @require_torch
@@ -69,7 +71,7 @@ class ModelTester:
         # hack needed for modeling_common tests - despite not really having this attribute in this model
         self.vocab_size = self.src_vocab_size
 
-    def prepare_config_and_inputs_for_common(self):
+    def prepare_config_and_inputs(self):
         input_ids = ids_tensor([self.batch_size, self.seq_length], self.src_vocab_size).clamp(
             3,
         )
@@ -97,31 +99,45 @@ class ModelTester:
         inputs_dict = prepare_fsmt_inputs_dict(config, input_ids)
         return config, inputs_dict
 
+    def prepare_config_and_inputs_for_common(self):
+        config, inputs_dict = self.prepare_config_and_inputs()
+        inputs_dict["decoder_input_ids"] = inputs_dict["input_ids"]
+        inputs_dict["decoder_attention_mask"] = inputs_dict["attention_mask"]
+        inputs_dict["use_cache"] = False
+        return config, inputs_dict
+
 
 def prepare_fsmt_inputs_dict(
     config,
     input_ids,
     attention_mask=None,
+    head_mask=None,
+    decoder_head_mask=None,
+    cross_attn_head_mask=None,
 ):
     if attention_mask is None:
         attention_mask = input_ids.ne(config.pad_token_id)
+    if head_mask is None:
+        head_mask = torch.ones(config.encoder_layers, config.encoder_attention_heads, device=torch_device)
+    if decoder_head_mask is None:
+        decoder_head_mask = torch.ones(config.decoder_layers, config.decoder_attention_heads, device=torch_device)
+    if cross_attn_head_mask is None:
+        cross_attn_head_mask = torch.ones(config.decoder_layers, config.decoder_attention_heads, device=torch_device)
     return {
         "input_ids": input_ids,
         "attention_mask": attention_mask,
+        "head_mask": head_mask,
+        "decoder_head_mask": decoder_head_mask,
     }
 
 
 @require_torch
-class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
+class FSMTModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase):
     all_model_classes = (FSMTModel, FSMTForConditionalGeneration) if is_torch_available() else ()
     all_generative_model_classes = (FSMTForConditionalGeneration,) if is_torch_available() else ()
     is_encoder_decoder = True
-    # TODO(SS): fix the below in a separate PR
     test_pruning = False
-    test_torchscript = True
-    test_head_masking = False
-    test_resize_embeddings = True  # This requires inputs_dict['input_ids']
-    test_missing_keys = False  # because FSMTForConditionalGeneration and FSMTModel now have identical state_dict
+    test_missing_keys = False
 
     def setUp(self):
         self.model_tester = ModelTester(self)
@@ -140,7 +156,7 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
 
     # XXX: override test_model_common_attributes / different Embedding type
     def test_model_common_attributes(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
 
         for model_class in self.all_model_classes:
             model = model_class(config)
@@ -150,7 +166,7 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
             self.assertTrue(x is None or isinstance(x, torch.nn.modules.sparse.Embedding))
 
     def test_initialization_more(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
         model = FSMTModel(config)
         model.to(torch_device)
         model.eval()
@@ -168,7 +184,7 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
         # self.assertAlmostEqual(torch.std(model.encoder.embed_positions.weights).item(), config.init_std, 2)
 
     def test_advanced_inputs(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
         config.use_cache = False
         inputs_dict["input_ids"][:, -2:] = config.pad_token_id
         decoder_input_ids, decoder_attn_mask, causal_mask = _prepare_fsmt_decoder_inputs(
@@ -197,8 +213,9 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
         )[0]
         _assert_tensors_equal(decoder_features_with_long_encoder_mask, decoder_features_with_created_mask)
 
-    def test_save_load_strict(self):
-        config, inputs_dict = self.model_tester.prepare_config_and_inputs_for_common()
+    def test_save_load_missing_keys(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
+
         for model_class in self.all_model_classes:
             model = model_class(config)
 
@@ -206,6 +223,20 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
                 model.save_pretrained(tmpdirname)
                 model2, info = model_class.from_pretrained(tmpdirname, output_loading_info=True)
             self.assertEqual(info["missing_keys"], [])
+
+    @unittest.skip("Test has a segmentation fault on torch 1.8.0")
+    def test_export_to_onnx(self):
+        config, inputs_dict = self.model_tester.prepare_config_and_inputs()
+        model = FSMTModel(config).to(torch_device)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            torch.onnx.export(
+                model,
+                (inputs_dict["input_ids"], inputs_dict["attention_mask"]),
+                f"{tmpdirname}/fsmt_test.onnx",
+                export_params=True,
+                opset_version=12,
+                input_names=["input_ids", "attention_mask"],
+            )
 
     @unittest.skip("can't be implemented for FSMT due to dual vocab.")
     def test_resize_tokens_embeddings(self):
@@ -219,23 +250,9 @@ class FSMTModelTest(ModelTesterMixin, unittest.TestCase):
     def test_tie_model_weights(self):
         pass
 
-    @unittest.skip("failing on CI - needs review")
-    def test_torchscript_output_attentions(self):
+    @unittest.skip("TODO: Decoder embeddings cannot be resized at the moment")
+    def test_resize_embeddings_untied(self):
         pass
-
-    @unittest.skip("failing on CI - needs review")
-    def test_torchscript_output_hidden_state(self):
-        pass
-
-    # def test_auto_model(self):
-    #     # XXX: add a tiny model to s3?
-    #     model_name = "facebook/wmt19-ru-en-tiny"
-    #     tiny = AutoModel.from_pretrained(model_name)  # same vocab size
-    #     tok = AutoTokenizer.from_pretrained(model_name)  # same tokenizer
-    #     inputs_dict = tok.batch_encode_plus(["Hello my friends"], return_tensors="pt")
-
-    #     with torch.no_grad():
-    #         tiny(**inputs_dict)
 
 
 @require_torch
@@ -260,7 +277,6 @@ class FSMTHeadTests(unittest.TestCase):
             eos_token_id=2,
             pad_token_id=1,
             bos_token_id=0,
-            return_dict=True,
         )
 
     def _get_config_and_data(self):
@@ -304,7 +320,6 @@ class FSMTHeadTests(unittest.TestCase):
             max_length=max_length,
         )
         self.assertEqual(new_input_ids.shape, (input_ids.shape[0], max_length))
-        # TODO(SS): uneven length batches, empty inputs
 
     def test_shift_tokens_right(self):
         input_ids = torch.Tensor([[71, 82, 18, 33, 2, 1, 1], [68, 34, 26, 58, 30, 82, 2]]).long()
@@ -353,10 +368,9 @@ def _assert_tensors_equal(a, b, atol=1e-12, prefix=""):
             return True
         raise
     except Exception:
-        msg = "{} != {}".format(a, b)
-        if prefix:
-            msg = prefix + ": " + msg
-        raise AssertionError(msg)
+        if len(prefix) > 0:
+            prefix = f"{prefix}: "
+        raise AssertionError(f"{prefix}{a} != {b}")
 
 
 def _long_tensor(tok_lst):
@@ -366,7 +380,17 @@ def _long_tensor(tok_lst):
 TOLERANCE = 1e-4
 
 
+pairs = [
+    ["en-ru"],
+    ["ru-en"],
+    ["en-de"],
+    ["de-en"],
+]
+
+
 @require_torch
+@require_sentencepiece
+@require_tokenizers
 class FSMTModelIntegrationTests(unittest.TestCase):
     tokenizers_cache = {}
     models_cache = {}
@@ -399,7 +423,7 @@ class FSMTModelIntegrationTests(unittest.TestCase):
 
         src_text = "My friend computer will translate this for me"
         input_ids = tokenizer([src_text], return_tensors="pt")["input_ids"]
-        input_ids = _long_tensor(input_ids)
+        input_ids = _long_tensor(input_ids).to(torch_device)
         inputs_dict = prepare_fsmt_inputs_dict(model.config, input_ids)
         with torch.no_grad():
             output = model(**inputs_dict)[0]
@@ -409,19 +433,10 @@ class FSMTModelIntegrationTests(unittest.TestCase):
         # may have to adjust if switched to a different checkpoint
         expected_slice = torch.tensor(
             [[-1.5753, -1.5753, 2.8975], [-0.9540, -0.9540, 1.0299], [-3.3131, -3.3131, 0.5219]]
-        )
+        ).to(torch_device)
         self.assertTrue(torch.allclose(output[:, :3, :3], expected_slice, atol=TOLERANCE))
 
-    @parameterized.expand(
-        [
-            ["en-ru"],
-            ["ru-en"],
-            ["en-de"],
-            ["de-en"],
-        ]
-    )
-    @slow
-    def test_translation(self, pair):
+    def translation_setup(self, pair):
         text = {
             "en": "Machine learning is great, isn't it?",
             "ru": "Машинное обучение - это здорово, не так ли?",
@@ -432,16 +447,32 @@ class FSMTModelIntegrationTests(unittest.TestCase):
         print(f"Testing {src} -> {tgt}")
         mname = f"facebook/wmt19-{pair}"
 
-        src_sentence = text[src]
-        tgt_sentence = text[tgt]
+        src_text = text[src]
+        tgt_text = text[tgt]
 
         tokenizer = self.get_tokenizer(mname)
         model = self.get_model(mname)
+        return tokenizer, model, src_text, tgt_text
 
-        input_ids = tokenizer.encode(src_sentence, return_tensors="pt")
+    @parameterized.expand(pairs)
+    @slow
+    def test_translation_direct(self, pair):
+        tokenizer, model, src_text, tgt_text = self.translation_setup(pair)
+
+        input_ids = tokenizer.encode(src_text, return_tensors="pt").to(torch_device)
+
         outputs = model.generate(input_ids)
         decoded = tokenizer.decode(outputs[0], skip_special_tokens=True)
-        assert decoded == tgt_sentence, f"\n\ngot: {decoded}\nexp: {tgt_sentence}\n"
+        assert decoded == tgt_text, f"\n\ngot: {decoded}\nexp: {tgt_text}\n"
+
+    @parameterized.expand(pairs)
+    @slow
+    def test_translation_pipeline(self, pair):
+        tokenizer, model, src_text, tgt_text = self.translation_setup(pair)
+        device = 0 if torch_device == "cuda" else -1
+        pipeline = TranslationPipeline(model, tokenizer, framework="pt", device=device)
+        output = pipeline([src_text])
+        self.assertEqual([tgt_text], [x["translation_text"] for x in output])
 
 
 @require_torch
@@ -449,10 +480,9 @@ class TestSinusoidalPositionalEmbeddings(unittest.TestCase):
     padding_idx = 1
     tolerance = 1e-4
 
-    @unittest.skip("failing on CI - needs review")
     def test_basic(self):
         input_ids = torch.tensor([[4, 10]], dtype=torch.long, device=torch_device)
-        emb1 = SinusoidalPositionalEmbedding(embedding_dim=6, padding_idx=self.padding_idx, init_size=6).to(
+        emb1 = SinusoidalPositionalEmbedding(num_positions=6, embedding_dim=6, padding_idx=self.padding_idx).to(
             torch_device
         )
         emb = emb1(input_ids)
@@ -461,7 +491,7 @@ class TestSinusoidalPositionalEmbeddings(unittest.TestCase):
                 [9.0930e-01, 1.9999e-02, 2.0000e-04, -4.1615e-01, 9.9980e-01, 1.0000e00],
                 [1.4112e-01, 2.9995e-02, 3.0000e-04, -9.8999e-01, 9.9955e-01, 1.0000e00],
             ]
-        )
+        ).to(torch_device)
         self.assertTrue(
             torch.allclose(emb[0], desired_weights, atol=self.tolerance),
             msg=f"\nexp:\n{desired_weights}\ngot:\n{emb[0]}\n",
@@ -469,14 +499,10 @@ class TestSinusoidalPositionalEmbeddings(unittest.TestCase):
 
     def test_odd_embed_dim(self):
         # odd embedding_dim  is allowed
-        SinusoidalPositionalEmbedding.get_embedding(
-            num_embeddings=4, embedding_dim=5, padding_idx=self.padding_idx
-        ).to(torch_device)
+        SinusoidalPositionalEmbedding(num_positions=4, embedding_dim=5, padding_idx=self.padding_idx).to(torch_device)
 
         # odd num_embeddings is allowed
-        SinusoidalPositionalEmbedding.get_embedding(
-            num_embeddings=5, embedding_dim=4, padding_idx=self.padding_idx
-        ).to(torch_device)
+        SinusoidalPositionalEmbedding(num_positions=5, embedding_dim=4, padding_idx=self.padding_idx).to(torch_device)
 
     @unittest.skip("different from marian (needs more research)")
     def test_positional_emb_weights_against_marian(self):
@@ -488,7 +514,7 @@ class TestSinusoidalPositionalEmbeddings(unittest.TestCase):
                 [0.90929741, 0.93651021, 0.95829457, 0.97505713, 0.98720258],
             ]
         )
-        emb1 = SinusoidalPositionalEmbedding(init_size=512, embedding_dim=512, padding_idx=self.padding_idx).to(
+        emb1 = SinusoidalPositionalEmbedding(num_positions=512, embedding_dim=512, padding_idx=self.padding_idx).to(
             torch_device
         )
         weights = emb1.weights.data[:3, :5]
